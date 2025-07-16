@@ -6,19 +6,21 @@ CLI tool to randomly sample N vectors from datasets in formats:
   .fvecs, .bvecs, .ivecs, .fbin/.bin, .ibin, .bbin
 
 Usage:
-  python3 split_vecs.py <input_file> <output_file> <N> [--seed SEED]
+  python3 split_vecs.py <input_file> <output_file> <N> [--seed SEED] [--both --rest REST_FILE]
 """
 import sys, os, struct, random, argparse
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Randomly sample N vectors from various vector file formats"
+        description="Randomly sample N vectors and optionally split the rest"
     )
     parser.add_argument('input', help='Path to input vector file')
     parser.add_argument('output', help='Path for output sampled vectors')
     parser.add_argument('N', type=int, help='Number of vectors to sample')
     parser.add_argument('--seed', type=int, default=None, help='Random seed')
+    parser.add_argument('--both', action='store_true', help='Also output the rest of the vectors')
+    parser.add_argument('--rest', help='Path for the rest dataset (required with --both)')
     return parser.parse_args()
 
 
@@ -68,10 +70,9 @@ def sample_indices(total, N, seed=None):
     return sorted(random.sample(range(total), N))
 
 
-def write_samples(in_path, out_path, cfg, num, dim, indices):
+def write_samples(in_path, out_path, cfg, indices, dim):
     with open(in_path, 'rb') as fin, open(out_path, 'wb') as fout:
         if cfg['global_hdr']:
-            # write global header
             fout.write(struct.pack('II', len(indices), dim))
             data_offset = cfg['header_size']
             rec_size = dim * cfg['size']
@@ -87,13 +88,23 @@ def write_samples(in_path, out_path, cfg, num, dim, indices):
 
 def main():
     args = parse_args()
+    if args.both and not args.rest:
+        sys.exit('Error: --rest must be provided when using --both')
+
     cfg = determine_format(args.input)
-    filesize = os.path.getsize(args.input)
     with open(args.input, 'rb') as f:
         total, dim = read_header(f, cfg)
-    indices = sample_indices(total, args.N, args.seed)
-    write_samples(args.input, args.output, cfg, total, dim, indices)
-    print(f'Sampled {len(indices)} vectors (indices {indices[0]} ... {indices[-1]}) into {args.output}')
+
+    # sample and rest indices
+    sampled = sample_indices(total, args.N, args.seed)
+    write_samples(args.input, args.output, cfg, sampled, dim)
+    print(f'Sampled {len(sampled)} vectors into {args.output}')
+
+    if args.both:
+        rest_set = set(range(total)) - set(sampled)
+        rest = sorted(rest_set)
+        write_samples(args.input, args.rest, cfg, rest, dim)
+        print(f'Wrote remaining {len(rest)} vectors into {args.rest}')
 
 
 if __name__ == '__main__':
