@@ -52,29 +52,49 @@ def read_vectors(path):
     arr = np.frombuffer(raw, dtype=dtype, count=N)
     return arr['vec'].astype(np.float32, copy=False)
 
+def process_batch_l2_fast(batch_idx, q_batch, base, base_sq, K):
+    """
+    Compute exact K-NN (Euclidean) for q_batch against base.
+    Assumes `base_sq = np.einsum('ij,ij->i', base, base)` is precomputed once.
+    Returns (batch_idx, indices, distances).
+    """
+    # q_batch norms
+    query_sq = np.einsum('ij,ij->i', q_batch, q_batch)           # (qb,)
+
+    # full dot‐product matrix (N × qb)
+    prod = base.dot(q_batch.T)                                   # (N, qb)
+
+    # squared distances via broadcasted identity
+    d2 = base_sq[:, None] + query_sq[None, :] - 2.0 * prod       # (N, qb)
+    np.clip(d2, 0.0, None, out=d2)
+
+    # get the indices of the K smallest squared‐distances per query
+    idx_part = np.argpartition(d2, K, axis=0)[:K, :]             # (K, qb)
+
+    # gather those K×qb squared‐distances
+    qb = q_batch.shape[0]
+    cols = np.arange(qb)
+    d2_part = d2[idx_part, cols]                                 # (K, qb)
+
+    # sort each column of the K candidates
+    order = np.argsort(d2_part, axis=0)                          # (K, qb)
+
+    # now assemble final (qb, K) arrays
+    sorted_idx   = idx_part[order, cols].T                       # (qb, K)
+    sorted_dist2 = np.take_along_axis(d2_part, order, axis=0).T  # (qb, K)
+
+    return batch_idx, sorted_idx.astype(np.uint32), np.sqrt(sorted_dist2).astype(np.float32)
+
+
 def process_batch(batch_idx, q_batch, base, K, metric):
     """
     Compute k-NN or k-max-sim for a slice of queries against the full base.
     metric: 'l2' for Euclidean, 'cosine' for cosine similarity.
     Returns (batch_idx, indices, distances_or_similarities).
     """
+    print(f"Processing batch {batch_idx} with {q_batch.shape[0]} queries against base of size {base.shape[0]}")
     if metric == 'l2':
-        base_sq = np.sum(base * base, axis=1)
-        query_sq = np.sum(q_batch * q_batch, axis=1)
-        prod = base.dot(q_batch.T)
-        d2 = base_sq[:, None] + query_sq[None, :] - 2.0 * prod
-        np.clip(d2, 0.0, None, out=d2)
-        qb = q_batch.shape[0]
-        idx_part = np.argpartition(d2, K, axis=0)[:K, :]
-        indices = np.empty((qb, K), dtype=np.uint32)
-        distances = np.empty((qb, K), dtype=np.float32)
-        for j in range(qb):
-            part = idx_part[:, j]
-            dvals = d2[part, j]
-            order = np.argsort(dvals)
-            sel = part[order]
-            indices[j, :] = sel
-            distances[j, :] = np.sqrt(dvals[order])
+        batch_idx, indices, distances = process_batch_l2_fast(batch_idx, q_batch, base, np.einsum('ij,ij->i', base, base), K)
     else:  # cosine
         base_norm = np.linalg.norm(base, axis=1)
         query_norm = np.linalg.norm(q_batch, axis=1)
