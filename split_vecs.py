@@ -97,12 +97,17 @@ def main():
 
     # sample and rest indices
     sampled = sample_indices(total, args.N, args.seed)
+    # shuffle to avoid any ordering bias
+    random.shuffle(sampled)
+
     write_samples(args.input, args.output, cfg, sampled, dim)
     print(f'Sampled {len(sampled)} vectors into {args.output}')
 
     if args.both:
         rest_set = set(range(total)) - set(sampled)
         rest = sorted(rest_set)
+        # shuffle to avoid any ordering bias
+        random.shuffle(rest)
         write_samples(args.input, args.rest, cfg, rest, dim)
         print(f'Wrote remaining {len(rest)} vectors into {args.rest}')
 

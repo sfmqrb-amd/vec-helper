@@ -95,7 +95,7 @@ def process_batch(batch_idx, q_batch, base, K, metric):
     print(f"Processing batch {batch_idx} with {q_batch.shape[0]} queries against base of size {base.shape[0]}")
     if metric == 'l2':
         batch_idx, indices, distances = process_batch_l2_fast(batch_idx, q_batch, base, np.einsum('ij,ij->i', base, base), K)
-    else:  # cosine
+    elif metric == 'cosine':  # cosine
         base_norm = np.linalg.norm(base, axis=1)
         query_norm = np.linalg.norm(q_batch, axis=1)
         prod = base.dot(q_batch.T)
@@ -111,6 +111,21 @@ def process_batch(batch_idx, q_batch, base, K, metric):
             sel = part[order]
             indices[j, :] = sel
             distances[j, :] = sims[order]
+    elif metric == 'ip':  # inner product
+        prod = base.dot(q_batch.T)
+        cos_sim = prod 
+        qb = q_batch.shape[0]
+        idx_part = np.argpartition(-cos_sim, K, axis=0)[:K, :]
+        indices = np.empty((qb, K), dtype=np.uint32)
+        distances = np.empty((qb, K), dtype=np.float32)
+        for j in range(qb):
+            part = idx_part[:, j]
+            sims = cos_sim[part, j]
+            order = np.argsort(-sims)
+            sel = part[order]
+            indices[j, :] = sel
+            distances[j, :] = sims[order]
+
     return batch_idx, indices, distances
 
 def main():
@@ -121,7 +136,7 @@ def main():
     p.add_argument('--K',         type=int, required=True, help='Number of neighbors')
     p.add_argument('--batch_size',type=int, default=1024, help='Number of queries per batch')
     p.add_argument('--threads',   type=int, default=os.cpu_count(), help='Number of worker threads')
-    p.add_argument('--metric',    choices=['l2','cosine'], default='l2',
+    p.add_argument('--metric',    choices=['l2','cosine','ip'], default='l2',
                    help='Distance metric: l2 (Euclidean) or cosine similarity')
     args = p.parse_args()
 
